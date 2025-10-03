@@ -2,3 +2,47 @@ cd "C:\Users\claud\OneDrive\Ambiente de Trabalho\tese"
 .\.venv\Scripts\Activate
 
 pip install pandas
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+The next part is to divide the tweets in weeks. The tweets gathered are from 25/09/2024 to 24/09/2025. To make all weeks have 7 days, the starting date will be 26/09/2024 (Thursday) and each week slice will start at a Thursday and end at a Wednesday, finishing at 24/09/2025. 52 week files will, therefore, be created
+
+
+df['created_at'] = pd.to_datetime(df['created_at'])
+
+df = df.sort_values('created_at')
+
+start_date = pd.Timestamp("2024-09-26")  # Thursday
+end_date = pd.Timestamp("2025-09-24")    # Wednesday
+
+os.makedirs("datasets/weeks", exist_ok=True)
+
+week_num = 1
+current_start = start_date
+
+while current_start <= end_date:
+    current_end = current_start + pd.Timedelta(days=6)  # From Thursday until next Wednesday
+    
+    mask = (df['created_at'] >= current_start) & (df['created_at'] <= current_end)
+    week_df = df.loc[mask]
+    
+    week_filename = f"week{week_num}.csv"
+    week_df.to_csv(os.path.join("datasets/weeks", week_filename), index=False)
+    
+    current_start = current_end + pd.Timedelta(days=1)
+    week_num += 1
