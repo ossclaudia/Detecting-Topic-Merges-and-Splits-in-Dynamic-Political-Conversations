@@ -1,4 +1,4 @@
-cd "C:\Users\claud\OneDrive\Ambiente de Trabalho\tese"
+cd "C:\Users\claud\OneDrive\Ambiente de Trabalho\tese\Code"
 .\.venv\Scripts\Activate
 
 pip install pandas
