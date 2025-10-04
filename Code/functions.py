@@ -56,11 +56,11 @@ def clean_tweet_row(row):
     combined = f"{text} {hashtags_clean} {url_words}"
 
     # 4. Remove RT, @, emojis, punctuation, etc.
-    combined = re.sub(r'\bRT\b', '', combined)
+    combined = re.sub(r'\bRT\b', '', combined) # RT out 
     combined = emoji.replace_emoji(combined, replace='')
     combined = re.sub(r'http\S+|www\S+', '', combined)
     combined = re.sub(r'#', '', combined)
-    combined = re.sub(r'@', '', combined)
+    combined = re.sub(r'@', '', combined) # Maintain the person's account name, just taking the @ out
     combined = re.sub(r'[^a-zA-Z\s]', ' ', combined)
     combined = combined.lower()
     combined = re.sub(r'\s+', ' ', combined).strip()
@@ -79,20 +79,19 @@ def parallel_apply(df, func):
         result = p.map(func, [row for _, row in df.iterrows()])
     return result
 
-def normalize_entities_advanced(text, canonical_entities, canonical_keys, threshold=90):
+def normalize_entities(text, canonical_entities, canonical_keys, threshold=90):
     """
     Normalize entities using NER and fuzzy matching.
     
     threshold (int): min similarity for fuzzy match (0-100)
-    
-    str: normalized text
     
     """
 
     if not text:
         return ""
     
-    # Step 1: NER-based normalization
+    # Step 1: NER-based normalization - Replace recognized person or organization entities in the text 
+    # with their canonical forms defined in entity_dict
     doc = nlp_ner(text)
     for ent in doc.ents:
         if ent.label_ in ["PERSON", "ORG"]:
@@ -100,7 +99,8 @@ def normalize_entities_advanced(text, canonical_entities, canonical_keys, thresh
                 # replace whole word occurrences
                 text = re.sub(r'\b{}\b'.format(re.escape(ent.text)), canonical_entities[ent.text], text)
     
-    # Step 2: Fuzzy matching for remaining words
+    # Step 2: Fuzzy matching for remaining words For remaining words, replace those that closely match 
+    # canonical entity names based on a similarity threshold, correcting typos or variations
     words = text.split()
     normalized_words = []
     for word in words:
