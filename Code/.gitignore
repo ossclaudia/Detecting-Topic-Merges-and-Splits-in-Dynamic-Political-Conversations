@@ -1,3 +1,5 @@
 /datasets/tweets.csv
 /.venv
 /datasets/cleanedtweets.csv
+/datasets/lda_dynamic_metrics.csv
+/datasets/nmf_dynamic_metrics.csv
