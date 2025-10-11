@@ -245,7 +245,6 @@ def train_bertopic_minilm(subset, embedding_model=None, n_topics=None):
         nr_topics=n_topics,
         calculate_probabilities=False,
         verbose=False,
-        reduce_frequent_words=True
     )
 
     try:
