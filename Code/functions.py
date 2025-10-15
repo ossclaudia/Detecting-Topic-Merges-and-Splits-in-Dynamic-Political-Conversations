@@ -27,9 +27,6 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from datetime import timedelta
 from itertools import product
-from sklearn.cluster import HDBSCAN
-from bertopic import BERTopic
-from sentence_transformers import SentenceTransformer
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 # --------------------------------Text Cleaning Utilities--------------------------------------------------------------------------
@@ -113,13 +110,22 @@ def spacy_tokenize(text):
     return tokens
 
 # ---------------------------------------------------------------------------------------------------------------------------------
-# ------------------------------------Basic Metrics--------------------------------------------------------------------------------
+# ------------------------------------Static Metrics--------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------------------------------
 
 def topic_diversity(topics_words):
-    all_words = [w for topic in topics_words for w in topic]
-    unique_words = len(set(all_words))
-    return unique_words / len(all_words) if all_words else np.nan
+    K = len(topics_words)
+    if K <= 1:
+        return np.nan
+    diversities = []
+    for k, topic_k in enumerate(topics_words):
+        redundancy_sum = 0
+        for w in topic_k:
+            redundancy_sum += sum(w in topic_q for i, topic_q in enumerate(topics_words) if i != k)
+        r_kC = redundancy_sum / (len(topic_k) * (K - 1))
+        d_kC = 1 - r_kC
+        diversities.append(d_kC)
+    return np.mean(diversities)
 
 def topic_coherence(topics_words, texts):
     dictionary = corpora.Dictionary(texts)
@@ -132,38 +138,14 @@ def topic_coherence(topics_words, texts):
     return coherence_model.get_coherence()
 
 # ---------------------------------------------------------------------------------------------------------------------------------
-# ------------------------------------Temporal Metrics-----------------------------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------------------------
-
-def temporal_topic_smoothness(prev_vecs, curr_vecs):
-    if prev_vecs is None or curr_vecs is None:
-        return np.nan
-    sims = []
-    for vec1 in prev_vecs:
-        similarities = [cosine_similarity([vec1], [vec2])[0][0] for vec2 in curr_vecs]
-        sims.append(max(similarities))
-    return np.mean(sims) if sims else np.nan
-
-def temporal_topic_coherence(prev_topics_words, curr_topics_words):
-    if prev_topics_words is None or curr_topics_words is None:
-        return np.nan
-    overlaps = []
-    for t1 in prev_topics_words:
-        for t2 in curr_topics_words:
-            inter = len(set(t1) & set(t2))
-            union = len(set(t1) | set(t2))
-            if union > 0:
-                overlaps.append(inter / union)
-    return np.mean(overlaps) if overlaps else np.nan
-
-# ---------------------------------------------------------------------------------------------------------------------------------
 # ------------------------------------LDA------------------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------------------------------
 
-def train_lda(subset, n_topics=8, dictionary=None):
+def train_lda(subset, n_topics=8, dictionary=None, top_n=10):
     if dictionary is None:
         raise ValueError("A global dictionary must be provided for LDA")
     corpus = [dictionary.doc2bow(tokens) for tokens in subset['tokens']]
+    
     lda_model = LdaModel(
         corpus=corpus,
         id2word=dictionary,
@@ -173,9 +155,10 @@ def train_lda(subset, n_topics=8, dictionary=None):
         alpha='auto',
         chunksize=2000
     )
+    
     topics_words = []
     topic_vecs = []
-    for topic in lda_model.show_topics(num_topics=n_topics, num_words=len(dictionary), formatted=False):
+    for topic in lda_model.show_topics(num_topics=n_topics, num_words=top_n, formatted=False):
         words = [w for w, _ in topic[1]]
         topics_words.append(words)
         vec = np.zeros(len(dictionary))
@@ -183,6 +166,7 @@ def train_lda(subset, n_topics=8, dictionary=None):
             if word in dictionary.token2id:
                 vec[dictionary.token2id[word]] = weight
         topic_vecs.append(vec)
+    
     coherence = topic_coherence(topics_words, subset['tokens'])
     diversity = topic_diversity(topics_words)
     return topics_words, topic_vecs, coherence, diversity
@@ -213,74 +197,11 @@ def train_nmf(subset, global_vocab, n_topics=8):
     return topics_words, topic_vecs, coherence, diversity
 
 # ---------------------------------------------------------------------------------------------------------------------------------
-# ------------------------------------Optimized BERTopic powered by MiniLM---------------------------------------------------------
-# ---------------------------------------------------------------------------------------------------------------------------------
-
-def train_bertopic_minilm(subset, embedding_model=None, n_topics=None):
-    docs = [" ".join(tokens) for tokens in subset['tokens']]
-    if len(docs) < 5:
-        return None
-
-    # --- Embeddings (MiniLM) ---
-    if embedding_model is None:
-        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = embedding_model.encode(docs, show_progress_bar=False, convert_to_numpy=True)
-
-    # --- Optimized vectorizer ---
-    vectorizer = CountVectorizer(
-        ngram_range=(1, 1),
-        min_df=5,
-        max_features=170_000
-    )
-
-    # --- Clustering: HDBSCAN (no UMAP) ---
-    hdbscan_model = HDBSCAN(min_cluster_size=10, metric='euclidean', cluster_selection_method='eom')
-
-    # --- BERTopic configuration ---
-    topic_model = BERTopic(
-        embedding_model=None,        # we provide embeddings manually
-        umap_model=None,             # skip dimensionality reduction
-        hdbscan_model=hdbscan_model,
-        vectorizer_model=vectorizer,
-        nr_topics=n_topics,
-        calculate_probabilities=False,
-        verbose=False,
-    )
-
-    try:
-        topics, probs = topic_model.fit_transform(docs, embeddings=embeddings)
-    except Exception as e:
-        print(f"⚠️ BERTopic training failed: {e}")
-        return None
-
-    # --- Extract topic words & vectors ---
-    topics_dict = topic_model.get_topics()
-    topic_ids = [tid for tid in sorted(topics_dict.keys()) if tid != -1]
-
-    topics_words = []
-    topic_vecs = []
-    for tid in topic_ids:
-        words = [w for w, _ in topics_dict[tid]]
-        topics_words.append(words)
-        doc_idxs = [i for i, t in enumerate(topics) if t == tid]
-        if doc_idxs:
-            centroid = np.mean(embeddings[doc_idxs], axis=0)
-        else:
-            centroid = np.mean(embeddings, axis=0)
-        topic_vecs.append(centroid)
-
-    coherence = topic_coherence(topics_words, subset['tokens'])
-    diversity = topic_diversity(topics_words)
-
-    return topics_words, topic_vecs, coherence, diversity, topic_model
-
-# ---------------------------------------------------------------------------------------------------------------------------------
 # ------------------------------------Sliding Window-------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------------------------------
 
-def process_window_with_bertopic(model_type, start_date, tweets, window_size, global_vocab=None,
-                                 prev_topics=None, prev_vecs=None, n_topics=8, dictionary=None,
-                                 embedding_model=None, bertopic_params=None):
+def process_window(model_type, start_date, tweets, window_size, global_vocab=None,
+                   prev_topics=None, prev_vecs=None, n_topics=8, dictionary=None):
 
     current_end = start_date + window_size
     mask = (tweets['created_at'] >= start_date) & (tweets['created_at'] < current_end)
@@ -295,19 +216,10 @@ def process_window_with_bertopic(model_type, start_date, tweets, window_size, gl
         if res is None:
             return None
         topics, vecs, coherence, diversity = res
-    elif model_type == 'bertopic':
-        res = train_bertopic_minilm(subset, embedding_model=embedding_model, n_topics=n_topics)
-        if res is None:
-            return None
-        topics, vecs, coherence, diversity, model = res
     else:
-        raise ValueError("model_type must be 'lda', 'nmf', or 'bertopic'")
+        raise ValueError("model_type must be 'lda' or 'nmf'")
 
-    tts = temporal_topic_smoothness(prev_vecs, vecs)
-    ttc = temporal_topic_coherence(prev_topics, topics)
-    ttq = np.nan if np.isnan(tts) or np.isnan(ttc) else tts * ttc
     tq = coherence * diversity
-    dtq = np.nan if np.isnan(ttq) else 0.5 * (tq + ttq)
 
     return {
         'start_date': start_date.date(),
@@ -316,23 +228,16 @@ def process_window_with_bertopic(model_type, start_date, tweets, window_size, gl
         'coherence': coherence,
         'diversity': diversity,
         'tq': tq,
-        'tts': tts,
-        'ttc': ttc,
-        'ttq': ttq,
-        'dtq': dtq,
         'topics': [" | ".join(t) for t in topics],
         'topic_vecs': vecs,
-        'topic_words': topics,
-        'bertopic_model': model if model_type == 'bertopic' else None
+        'topic_words': topics
     }
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 # ------------------------------------Execution------------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------------------------------
 
-def run_dynamic_pipeline_with_bertopic(tweets, model_type='lda', n_topics=8,
-                                       window_days=7, step_days=3, bertopic_params=None,
-                                       embedding_model_name="all-MiniLM-L6-v2"):
+def run_dynamic_pipeline(tweets, model_type='lda', n_topics=8, window_days=7, step_days=3):
 
     start_date = tweets['created_at'].min()
     end_date = tweets['created_at'].max()
@@ -341,7 +246,6 @@ def run_dynamic_pipeline_with_bertopic(tweets, model_type='lda', n_topics=8,
 
     global_vocab = None
     global_dictionary = None
-    embedding_model = None
 
     if model_type == 'nmf':
         vectorizer = TfidfVectorizer(max_df=0.4, min_df=10)
@@ -350,17 +254,14 @@ def run_dynamic_pipeline_with_bertopic(tweets, model_type='lda', n_topics=8,
     elif model_type == 'lda':
         global_dictionary = corpora.Dictionary(tweets['tokens'])
         global_dictionary.filter_extremes(no_below=10, no_above=0.4)
-    elif model_type == 'bertopic':
-        embedding_model = SentenceTransformer(embedding_model_name)
 
     current_start = start_date
     results, prev_topics, prev_vecs = [], None, None
 
     while current_start + window_size <= end_date:
-        res = process_window_with_bertopic(
+        res = process_window(
             model_type, current_start, tweets, window_size,
-            global_vocab, prev_topics, prev_vecs, n_topics, dictionary=global_dictionary,
-            embedding_model=embedding_model, bertopic_params=bertopic_params
+            global_vocab, prev_topics, prev_vecs, n_topics, dictionary=global_dictionary
         )
         if res:
             prev_topics = res['topic_words']
@@ -369,5 +270,54 @@ def run_dynamic_pipeline_with_bertopic(tweets, model_type='lda', n_topics=8,
         current_start += step_size
 
     df = pd.DataFrame(results)
-    df.drop(columns=['topic_vecs', 'topic_words', 'bertopic_model'], inplace=True, errors='ignore')
+    df.drop(columns=['topic_vecs', 'topic_words'], inplace=True, errors='ignore')
     return df
+
+# ---------------------------------------------------------------------------------------------------------------------------------
+# ------------------------------------Show Static Metrics--------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------------------
+
+def plot_static_metrics(df, model_name):
+
+    x = range(1, len(df) + 1)
+    
+    # Create figure with 3 subplots side by side
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig.suptitle(f"Evolution of {model_name} Metrics Over Time", fontsize=14, fontweight='bold')
+
+    # Plot 1: Coherence
+    axes[0].plot(x, df['coherence'], marker='o', color='tab:blue')
+    axes[0].set_title("Coherence")
+    axes[0].set_xlabel("Window (n)")
+    axes[0].set_ylabel("Coherence")
+    axes[0].grid(True, linestyle='--', alpha=0.6)
+
+    # Plot 2: Diversity
+    axes[1].plot(x, df['diversity'], marker='o', color='tab:orange')
+    axes[1].set_title("Diversity")
+    axes[1].set_xlabel("Window (n)")
+    axes[1].set_ylabel("Diversity")
+    axes[1].grid(True, linestyle='--', alpha=0.6)
+
+    # Plot 3: TQ
+    axes[2].plot(x, df['tq'], marker='o', color='tab:green')
+    axes[2].set_title("Topic Quality (TQ)")
+    axes[2].set_xlabel("Window (n)")
+    axes[2].set_ylabel("TQ")
+    axes[2].grid(True, linestyle='--', alpha=0.6)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
+
+def summarize_static_metrics(df, model_name):
+
+    avg_coherence = df['coherence'].mean()
+    avg_diversity = df['diversity'].mean()
+    avg_tq = df['tq'].mean()
+
+    print(f"=== {model_name} Overall Metrics Summary ===")
+    print(f"Average Coherence: {avg_coherence:.4f}")
+    print(f"Average Diversity: {avg_diversity:.4f}")
+    print(f"Average Topic Quality (TQ): {avg_tq:.4f}")
+    
+    return None

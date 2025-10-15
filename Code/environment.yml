@@ -17,5 +17,4 @@ dependencies:
   - pip:
       - emoji
       - rapidfuzz
-      - bertopic==0.13.0
       - sentence-transformers
